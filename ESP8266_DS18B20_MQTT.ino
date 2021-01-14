@@ -7,6 +7,10 @@
   
   The above copyright notice and this permission notice shall be included in all
   copies or substantial portions of the Software.
+
+  Adoptions and improvements Copyright Harald Barth 2020
+  Attribution 4.0 International (CC BY 4.0) 
+
 */
 
 #include <OneWire.h>
