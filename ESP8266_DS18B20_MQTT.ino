@@ -15,22 +15,24 @@
 #include <Ticker.h>
 #include <AsyncMqttClient.h>
 
-#define WIFI_SSID "REPLACE_WITH_YOUR_SSID"
-#define WIFI_PASSWORD "REPLACE_WITH_YOUR_PASSWORD"
+/* credentials.h contains defines of WIFI_SSID and WIFI_PASSWORD */
+#include "credentials.h"
 
 // Raspberri Pi Mosquitto MQTT Broker
-#define MQTT_HOST IPAddress(192, 168, 1, XXX)
+#define MQTT_HOST IPAddress(192, 168, 0, 17)
 // For a cloud MQTT broker, type the domain name
 //#define MQTT_HOST "example.com"
 #define MQTT_PORT 1883
 
 // Temperature MQTT Topics
-#define MQTT_PUB_TEMP "esp/ds18b20/temperature"
+#define MQTT_PUB_TEMP "tingfast45/fridgeESP/temperature/"
 
 // GPIO where the DS18B20 is connected to
 const int oneWireBus = 4;          
 // Setup a oneWire instance to communicate with any OneWire devices
 OneWire oneWire(oneWireBus);
+int numberOfDevices = 0;
+
 // Pass our oneWire reference to Dallas Temperature sensor 
 DallasTemperature sensors(&oneWire);
 // Temperature value
@@ -43,8 +45,13 @@ WiFiEventHandler wifiConnectHandler;
 WiFiEventHandler wifiDisconnectHandler;
 Ticker wifiReconnectTimer;
 
-unsigned long previousMillis = 0;   // Stores last time temperature was published
-const long interval = 10000;        // Interval at which to publish sensor readings
+// function to print a device address
+void printAddress(DeviceAddress deviceAddress) {
+  for (uint8_t i = 0; i < 8; i++){
+    if (deviceAddress[i] < 16) Serial.print("0");
+      Serial.print(deviceAddress[i], HEX);
+  }
+}
 
 void connectToWifi() {
   Serial.println("Connecting to Wi-Fi...");
@@ -101,11 +108,37 @@ void onMqttPublish(uint16_t packetId) {
   Serial.println(packetId);
 }
 
+DeviceAddress allDevices[10]; 
+byte tries = 0;
+
 void setup() {
+  DeviceAddress tempDeviceAddress; 
   sensors.begin();
+
   Serial.begin(115200);
   Serial.println();
-  
+
+  // Init Sensors
+  numberOfDevices = sensors.getDeviceCount();
+  Serial.println(numberOfDevices);
+  int found=0;
+  for(int i=0;i<numberOfDevices && found < 10; i++){
+    // Search the wire for address
+      if(sensors.getAddress(allDevices[found], i)){
+	  Serial.print("Found device ");
+	  Serial.print(i, DEC);
+	  Serial.print(" with address: ");
+	  printAddress(allDevices[found]);
+	  found++;
+	  Serial.println();
+      } else {
+	  Serial.print("Found ghost device at ");
+	  Serial.print(i, DEC);
+	  Serial.print(" but could not detect address. Check power and cabling");
+      }
+  }
+  numberOfDevices = found;
+
   wifiConnectHandler = WiFi.onStationModeGotIP(onWifiConnect);
   wifiDisconnectHandler = WiFi.onStationModeDisconnected(onWifiDisconnect);
 
@@ -122,22 +155,18 @@ void setup() {
 }
 
 void loop() {
-  unsigned long currentMillis = millis();
-  // Every X number of seconds (interval = 10 seconds) 
-  // it publishes a new MQTT message
-  if (currentMillis - previousMillis >= interval) {
-    // Save the last time a new reading was published
-    previousMillis = currentMillis;
-    // New temperature readings
-    sensors.requestTemperatures(); 
-    // Temperature in Celsius degrees
-    temp = sensors.getTempCByIndex(0);
-    // Temperature in Fahrenheit degrees
-    //temp = sensors.getTempFByIndex(0);
-    
-    // Publish an MQTT message on topic esp/ds18b20/temperature
-    uint16_t packetIdPub1 = mqttClient.publish(MQTT_PUB_TEMP, 1, true, String(temp).c_str());                            
-    Serial.printf("Publishing on topic %s at QoS 1, packetId: %i ", MQTT_PUB_TEMP, packetIdPub1);
-    Serial.printf("Message: %.2f \n", temp);
+  uint16_t packetIdPub1 = 0;
+  sensors.requestTemperatures(); 
+  for(int i=0; i<numberOfDevices; i++){
+      // Temperature in Celsius degrees
+      temp = sensors.getTempC(allDevices[i]);
+      String str = String(MQTT_PUB_TEMP) + String(i);
+      packetIdPub1 = mqttClient.publish(str.c_str(), 1, true, String(temp).c_str());
+      Serial.printf("Publishing on topic %s at QoS 1, packetId: %i ", str.c_str(), packetIdPub1);
+      Serial.printf("Message: %.2f \n", temp);
   }
+  tries++;
+  delay(10000);
+  if (packetIdPub1 >= numberOfDevices*2  || tries > 20)
+      ESP.deepSleep(5 * 60 * 1000000L); // 5 min
 }
